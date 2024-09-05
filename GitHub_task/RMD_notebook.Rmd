@@ -1,0 +1,15 @@
+---
+title: "Введение в автоматизацию обработки данных на R"
+author: "Anastasiia Potamoshneva"
+date: "`r sys.Date()`"
+output: 
+  word_document:
+    toc: yes
+    toc_depth: 3
+toc_title: "Оглавление" 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
