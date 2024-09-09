@@ -12,4 +12,197 @@ toc_title: "Оглавление"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+library(readr)
+library(readxl)
+library(purrr)
+library(psych)
+library(tibble)
+library(dplyr)
+
+error <- as_mapper(~ sd(.x)/sqrt(length(.x))) #функция для вычисление стандартной ошибки среднего
+
+Sys.setlocale(,"ru_RU") #исправление ошибки с кодировкой кириллицы
+
 ```
+
+# Чтение данных
+
+---
+
+## Функции для чтения файлов
+
+```{r read}
+
+data_delim <- read_delim("data/raw/data_tsv.tsv", delim = ",", na = "NA")
+
+data_csv <- read_csv("data/raw/data_csv.csv", skip = 0, n_max = Inf)
+
+data_csv2 <- read_csv2("data/raw/data_csv2.csv", skip = 0, n_max = Inf)
+
+data_tsv <- read_tsv("data/raw/data_tsv.tsv", skip = 0, n_max = Inf)
+
+data_excel <- read_excel("data/raw/data_excel.xlsx", sheet = 1)
+
+numeric_data <- read_rds("data/raw/numeric_data.rds")
+
+factor_data <- read_rds("data/raw/factor_data.rds")
+
+```
+
+Для чтения данных из SPSS и SAS используют haven::read_spss(), haven::read_sas()
+
+Для чтения данных в среде R- readr::read_rds()
+
+## Функции для записи файлов
+
+Запись файлов в нужном формате. Например:
+
+```{r write}
+
+write_rds(data_tsv, "data/raw/data_rds.rds")
+
+```
+
+# Расчет базовых статистик
+
+---
+
+## Базовые статистики
+
+```{r stat}
+
+mean(c(20, 68, 45, 76, 41, 36, 13, 52, 77, 53, 70, 73), trim=0, na.rm=TRUE) # нахождение среднего
+
+median(c(30, 87, 55, -71, 93, 50, 34, -51, 13, 96, -62, 53, -85), na.rm=TRUE) # нахождение медианы
+
+min(c(13, 50, 44, 37, 20, 29, -8, 4, 45, 31, 47, -5, -2, 24, 17, 45, 44, 31, -5, 26), na.rm=TRUE) # минимальное значение
+
+max(c(13, 50, 44, 37, 20, 29, -8, 4, 45, 31, 47, -5, -2, 24, 17, 45, 44, 31, -5, 26), na.rm=TRUE) # максимальное значение
+
+quantile(c(31.83, 45.12, 55.66, 67.76, 25.73, 42.87, 55.22, 44.92, 48.03, 41.37, 66.26, 114.02, 32.93), probs = seq(0, 1, 0.25), na.rm = FALSE, names = TRUE) # квантили
+
+var(c(65.14, 49.87, 34.11, 43.23, 35.72, 35.73, 70.86), na.rm=TRUE) # несмещенная оценка дисперсии
+
+sd(c(65.14, 49.87, 34.11, 43.23, 35.72, 35.73, 70.86)) # стандартное отклонение
+
+IQR(c(26.17, 97.73, 24.81, 53.62, 87.72, 45.19, 45.7, 69.63, 36.76, 7.17), na.rm=TRUE) # межквартильный интервал (0.75 минус 0.25 квартиль)
+
+vec <- 1:10
+length(vec) # длина вектора
+sum(!is.na(vec)) #10 (количество значений без учёта пропущенных)
+sum(is.na(vec)) #0 (количество пропущенных значений)
+
+error(c(47.44, 62.44, 20.44, 72.75, 77.86, 13.74, 28.2, 50.47, 59.19, 69.04), na.rm=TRUE) # стандартная ошибка среднего
+```
+
+## Обобщающие функции статистик
+
+```{r}
+summary(data_tsv)
+psych::describe(numeric_data) # для датафрейма с количественными переменными
+table(factor_data$Группа, factor_data$`Группа крови`, useNA="always") # категориальные переменные
+prop.table(table(factor_data$Группа, factor_data$`Группа крови`))
+
+```
+
+
+
+# Серьезная работа с датафреймами с помощью пакетов dplyr, tibble
+
+## tibble вместо data.frame
+
+```{r}
+
+data_csv %>% View()
+data <- read_rds("data/raw/data_rds.rds")
+data %>% add_column(just_column="just values", .before=1)
+data %>% add_row(`Группа`="New group", `Возраст`= 100, .before=1)
+data %>% mutate(ID=row_number())
+
+```
+
+## Склеивание
+
+```{r}
+
+data_1 <- tibble(var_1 = 1:10, var_2 = rep(c("Группа 1", "Группа 2"), 5))
+
+data_2 <- tibble(var_2 = rbeta(10, 1, 5), var_3 = rnorm(10))
+
+data_3 <- tibble(var_4 = 100:91, var_5 = rep(c("Молодые", "Средний возраст"), 5))
+
+data_1 %>% bind_cols(data_2) %>% bind_cols(data_3)
+
+#обязательно одинаковое кол-во строк и разные имена переменных
+
+data_1 <- tibble(var_1 = 1:8) %>% mutate(id = row_number())
+
+    data_2 <- tibble(var_2 = rnorm(10)) %>% mutate(`Subject ID` = row_number())
+
+data_1 %>% 
+  left_join(data_2, by= c("id"="Subject ID"))
+```
+
+Для склеивания строк- dplyr::bind_rows()
+
+## Группировка
+
+```{r}
+
+data %>% group_by(`Группа`)
+data %>% split(~`Группа`)
+data %>%
+  rowwise() %>%
+  mutate(`Среднее по базофилам за два визита` = mean(c(`Базофилы_E1`, `Базофилы_E2`))) %>%
+  ungroup() %>%
+  select(`Базофилы_E1`, `Базофилы_E2`, `Среднее по базофилам за два визита`)
+
+```
+
+## Выбор столбцов
+
+```{r}
+
+data <- read_tsv("data/raw/data_tsv.tsv")
+data %>% glimpse()
+data %>% select(contains("_E1")) 
+data %>% select(matches("_E\\d{1}")) 
+data %>% select(starts_with("Б")) 
+data %>% select(ends_with("E2")) 
+
+```
+
+---
+Приоритет логических операторов от высшего к низшему. 
+
+    x < y, x > y, x <= y, x => y, x == y, x != y (операторы сравнения)
+    !x (логическое НЕ)
+    x & y (логическое И)
+    x | y (логическое ИЛИ)
+---
+
+```{r}
+data %>% select(`Пол`, everything())
+```
+
+## Выбор строк
+
+```{r}
+
+data %>% slice(1:10)
+data %>% slice(1:10 * -1)
+data %>% slice_head(n=10)
+data %>% slice_head(prop = 0.01)
+data %>% slice_tail(prop = 0.1)
+
+data %>% filter(`Пол`=="Женский")
+data %>% filter(`Группа крови` %in% c("A (II)", "0 (I)") & `Группа` !="Группа 1") # для категориальных переменных
+data %>% filter(between(`Возраст`, 31, 34)) # для количественных переменных
+data %>% filter(near(`Эозинофилы_E1`, 3.38, tol=0.1))
+
+data %>% filter(if_all(.cols = contains("Базофилы"), .fns = function(x) x > 1.5))
+data %>% filter(if_any(.cols = contains("Базофилы"), .fns = function(x) x > 1.5))
+
+```
+
+
