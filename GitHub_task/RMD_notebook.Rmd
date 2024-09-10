@@ -18,10 +18,14 @@ library(purrr)
 library(psych)
 library(tibble)
 library(dplyr)
+library(tidyr)
+library(stringr)
+library(stringi)
+library(flextable)
 
 error <- as_mapper(~ sd(.x)/sqrt(length(.x))) #функция для вычисление стандартной ошибки среднего
 
-Sys.setlocale(,"ru_RU") #исправление ошибки с кодировкой кириллицы
+Sys.setlocale("LC_ALL", "Ru_Ru") #исправление ошибки с кодировкой кириллицы
 
 ```
 
@@ -172,14 +176,12 @@ data %>% select(ends_with("E2"))
 
 ```
 
----
 Приоритет логических операторов от высшего к низшему. 
 
     x < y, x > y, x <= y, x => y, x == y, x != y (операторы сравнения)
     !x (логическое НЕ)
     x & y (логическое И)
     x | y (логическое ИЛИ)
----
 
 ```{r}
 data %>% select(`Пол`, everything())
@@ -203,6 +205,174 @@ data %>% filter(near(`Эозинофилы_E1`, 3.38, tol=0.1))
 data %>% filter(if_all(.cols = contains("Базофилы"), .fns = function(x) x > 1.5))
 data %>% filter(if_any(.cols = contains("Базофилы"), .fns = function(x) x > 1.5))
 
+data %>% group_by(`Группа`) %>% 
+  filter(`Возраст` > 36)
+
 ```
 
+## Мутация переменных
+``` {r}
 
+data %>%
+  mutate(
+    `Возрастная группа` = case_when(
+      `Возраст` < 20 ~ "< 20",
+      between(`Возраст`, 20, 30) ~ "20 - 30",
+      `Возраст` > 30 ~ "> 30"
+    ) %>% as.factor()
+  ) %>% select(`Возраст`, `Возрастная группа`)
+
+data %>% mutate(`Группа крови` = `Группа крови` %>% 
+  as.character() %>% 
+  replace_na("нет данных") %>% 
+  as.factor())
+
+data %>% mutate(across(!contains("E1"), function(x) str_c(x, " + некая строка")))
+
+data %>% mutate(across(!contains("E1") & !c(`Группа`, `Возраст`) & where(is.numeric), function(x) x ^ 2), across(contains("E2"), function(x) x * 100))
+
+data %>% rowwise() %>%
+mutate(`Среднее по базофилам` =  mean(c_across(contains("Базофилы")))) %>%
+ungroup() %>%
+select(contains("Базофилы"))
+
+```
+
+## Переименование
+
+```{r}
+
+data %>% rename(`Эритроциты_Визит 1` = `Эритроциты_E1`, `Эритроциты_Визит 2` = `Эритроциты_E2`) %>% select(contains("Визит"))
+
+data %>% rename_with(function(x) x %>% stri_replace_all_regex(c("_E1", "_E2"), c("_Визит 1", "_Визит 2"), vectorize_all = FALSE)) %>% glimpse()
+
+```
+
+## Сортировка 
+
+```{r}
+
+data %>% arrange(`Группа крови`)
+
+data %>% arrange(desc(`Рост`))
+
+data %>% group_by(`Группа`) %>% arrange(`Возраст`, .by_group = TRUE)
+
+```
+
+## Повороты датафреймов
+```{r}
+
+data %>% 
+  select(`Группа`, contains("E1")) %>%
+  pivot_longer((!`Группа`))
+
+data %>%
+  select(`Группа`, contains("E1")) %>%
+  mutate(ID = row_number()) %>%
+  pivot_longer(-c(`Группа`, ID)) %>%
+  pivot_wider(id_cols = ID)
+  
+```
+## Выбор уникальных сочетаний
+
+```{r}
+
+data %>% distinct(`Группа`, .keep_all=TRUE)
+
+```
+
+## разделение и склеивание
+
+```{r}
+
+tibble(var_1 = rep(paste0("first part", "__", "second_part"), 10)) %>% separate(var_1, into = c("var_1", "var_2"), sep = "__") %>% unite("new_var", var_1, var_2, sep= "AND")
+
+```
+
+## Расчет статистик
+
+### Количественные переменные
+
+```{r num}
+
+data <- read_rds("data/raw/data_rds.rds")
+statistics <- list(
+  `Количество субъектов` = ~as.character(length(.x)),
+  `Количество (есть данные)` = ~as.character(sum(!is.na(.x))),
+  `Нет данных` = ~as.character(sum(is.na(.x))),
+  `Ср. знач.` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", mean(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `Станд. отклон.` = ~ifelse(sum(!is.na(.x)) < 3, "Н/П*", sd(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `95% ДИ для среднего` = ~sd(.x, na.rm = TRUE) %>% round(2) %>% as.character(),
+  `мин. - макс.` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", paste0(min(.x, na.rm = TRUE) %>% round(2), " - ", max(.x, na.rm = TRUE) %>% round(2))),
+  `Медиана` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", median(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `Q1 - Q3` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", paste0(quantile(.x, 0.25, na.rm = TRUE) %>% round(2), " - ", quantile(.x, 0.75, na.rm = TRUE) %>% round(2)))
+)
+
+data %>% 
+  select(`Группа`, where(is.numeric)) %>% 
+  group_by(`Группа`) %>% 
+  summarise(across(where(is.numeric), statistics)) %>% 
+  pivot_longer(!`Группа`) %>% 
+  separate(name, into = c("Переменная", "Статистика"), sep = "_") %>% 
+  rename(`Значение` = value) %>% flextable() %>% theme_box() %>% merge_v(c("Группа", "Переменная"))
+
+```
+
+### Категориальные переменные
+
+```{r cat}
+
+data %>%
+  select(`Группа`, !where(is.numeric)) %>%
+  mutate(`Группа крови` = `Группа крови` %>% as.character() %>% replace_na("нет данных") %>% as.factor()) %>%
+  count(`Группа`, `Группа крови`) %>%
+  group_by(`Группа`) %>%
+  mutate(`Процент по группе` = (n / sum(n)) %>% round(4) %>% `*`(100) %>% str_c("%")) %>%
+  ungroup() %>%
+  mutate(`Процент по выборке` = (n / sum(n)) %>% round(4) %>% `*`(100) %>% str_c("%"))
+
+```
+
+# Печать таблиц
+
+Часть см. в разделе расчет статистик.
+
+```{r}
+
+tibble(var_1 = c("p-value", "0.001"),
+       var_2 = c("p-value", "0.05")) %>%
+  flextable() %>%
+  theme_box() %>%
+  merge_h(i=1) %>% 
+  align(j = c("var_1", "var_2"), align = "center", part = "all")
+
+```
+
+```{r}
+
+tibble(`Adverse events` = c("SOC Желудочно-кишечные нарушения 10017947", "PT Тошнота 10028813", 
+                            "SOC Нарушения со стороны нервной системы 10029205", "PT Головная боль 10019211")) %>%
+  flextable() %>%
+  theme_box() %>%
+  align(i = ~ str_detect(`Adverse events`, "SOC"), align = "left") %>%
+  align(i = ~ str_detect(`Adverse events`, "PT"), align = "right") %>%
+bold(i = ~ str_detect(`Adverse events`, "SOC")) %>%
+italic(i = ~ str_detect(`Adverse events`, "PT")) %>%
+width(width = 2) %>%
+  color(i = ~ str_detect(`Adverse events`, "SOC"), color = "red")
+
+```
+
+```{r}
+
+is_pvalue_sign <- function(x) {
+  x %>% str_remove("<") %>% as.numeric() %>% `<`(0.05)
+}
+
+tibble("p-value" = c("<0.001", "0.38", "0.124", "0.005", "0.05")) %>%
+  flextable() %>%
+  theme_box() %>%
+  color(i = ~ is_pvalue_sign(`p-value`), color = "orange")
+
+```
