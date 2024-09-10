@@ -25,7 +25,7 @@ library(flextable)
 
 error <- as_mapper(~ sd(.x)/sqrt(length(.x))) #функция для вычисление стандартной ошибки среднего
 
-Sys.setlocale("LC_ALL", "Ru_Ru") #исправление ошибки с кодировкой кириллицы
+Sys.setlocale("LC_ALL", "Russian_Russia.UTF-8") #исправление ошибки с кодировкой кириллицы
 
 ```
 
