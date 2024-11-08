@@ -1,0 +1,73 @@
+---
+title: "ADMH"
+author: "Anastasiia Potamoshneva"
+date: "2024-11-08"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+library(anytime)
+```
+
+Загрузим собранный ADSL и домен MH, которые понадобятся для сборки ADMH:
+
+```{r upload}
+MH <- read.xlsx("./SDTM/MH_MEDICALHISTORY.xlsx")
+ADSL <- read.xlsx("./ADaM-like/ADSL.xlsx")
+
+MH %>% glimpse()
+```
+
+Работа с переменными из ADSL:
+
+```{r adsl}
+adsl_var <- ADSL %>% select(STUDYID, USUBJID, SUBJID,
+                             TRTP, TRTPN)
+```
+
+Работа с переменными из MH:
+
+```{r mh}
+mh_var <- MH %>%
+  filter(MHCAT == "Medical History") %>%
+  
+  select( SUBJID, MHSEQ, 
+          MHCAT, MHTERM, 
+          MHDECOD, MHBODSYS, 
+          MHSTDTC, MHSTDTC,
+          MHENDTC, MHENRTPT
+          ) %>% 
+  mutate( MHSEQ = as.numeric(MHSEQ),
+          MHSTDTC = as.character(MHSTDTC),
+          MHENDTC = as.character(MHENDTC)
+) %>% 
+  group_by(SUBJID) %>% 
+  filter( !is.na(MHTERM) | row_number() == 1) %>% # вывели каждый MHTERM субъекта, если у пациента не была заполнена переменная, то выводим одну пустую строку
+  mutate(ASTDT = format(anydate(MHSTDTC), "%d.%m.%Y"),
+         ASTDTF = case_when(is.na(MHSTDTC) ~ "Y"), # как получить пропущенный месяц или день отдельно, если оригинальная переменная без изменений и перевода в формат дат? и какой вывод при отсутствии дня и месяца одновременно?
+         AENDT = ifelse(MHENRTPT == "ONGOING", "ONGOING", format(anydate(MHENRTPT), "%d.%m.%Y")),
+         AENDTF = case_when(is.na(MHENDTC) ~ "Y"),
+         MHENRF = ifelse(MHENRTPT == "ONGOING", "ONGOING", NA))
+  
+  
+# Объединяем ADSL и переменные домена MH, проверяем порядок переменных
+
+ADMH <- left_join(adsl_var, mh_var, by = c("SUBJID")) %>% 
+  select(STUDYID, USUBJID, TRTP,
+         TRTPN, MHSEQ, MHCAT,
+         MHTERM, MHDECOD, MHBODSYS,
+         MHSTDTC, ASTDT, ASTDTF,
+         MHENDTC, AENDT, AENDTF,
+         MHENRTPT, MHENRF) 
+ADMH %>% glimpse()
+```
+
+```{r write}
+write.xlsx(ADMH, "./ADaM-like/ADMH.xlsx")
+```
