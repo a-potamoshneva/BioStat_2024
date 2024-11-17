@@ -112,8 +112,7 @@ p-value<0.05
 
 ```{r}
 test <- cleaned_data %>% t_test(lowph ~ inout, detailed=TRUE) %>% 
-  add_significance() %>%
-  mutate(y.position = max(cleaned_data$lowph, na.rm = TRUE) + 0.5) 
+  add_significance()
 print(test)
 
 
