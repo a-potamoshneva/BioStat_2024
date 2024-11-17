@@ -1,0 +1,243 @@
+---
+title: "adv_vis_1"
+author: "Anastasiia Potamoshneva"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(psych)
+library(corrplot)
+library(corrr)
+library(rstatix)
+library(ggpubr)
+library(factoextra)
+library(pheatmap)
+library(ggbiplot)
+library(plotly)
+library(tidymodels)
+library(embed)
+```
+
+# Чтение данных
+
+```{r}
+
+data <- readRDS("data/raw/very_low_birthweight.RDS") 
+
+```
+```{r} 
+# Добавление id 
+
+data <- data %>%
+  mutate(id = row_number())
+
+# Перевод категориальных переменных в факторы
+
+data <- data %>% mutate(
+  across(c(id, race, inout, delivery, pvh, ivh, ipe, sex), ~ as.factor(.x))) 
+
+```
+
+# Удаление колонок с более 100 пропусков и строк с пропусками
+
+```{r}
+
+cleaned_data <- data %>% select(where(~ sum(is.na(.)) <= 100)) %>% 
+  filter(across(everything(), ~ !is.na(.)))
+
+```
+
+# Удаление выбросов 
+
+```{r}
+outliers <- function(x) {
+  (x < quantile(x, 0.25) - 3*IQR(x)) | 
+    (x > quantile(x, 0.75) + 3*IQR(x))
+}
+
+cleaned_data %>% filter(across(where(is.numeric), ~ !outliers(.))) %>% glimpse()
+```
+
+# Создание графиков плотности для числовых переменных
+
+```{r}
+data_long <- cleaned_data %>%
+  select(where(is.numeric)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value")
+
+ggplot(data_long, aes(x = value)) +
+  geom_density(fill = "blue") +
+  facet_wrap(~ variable, scales = "free")+
+  theme_bw()
+```
+# Графики плотности для переменных bwt и gest с окраской по inout
+
+```{r}
+data_long <- cleaned_data %>%
+  pivot_longer(cols = c(bwt, gest), names_to = "variable", values_to = "value")
+
+ggplot(data_long, aes(x = value, fill = inout)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ variable, scales = "free", nrow=2)+
+  theme_bw()
+```
+# Cравнение значений колонки ‘lowph’ между группами в переменной inout
+
+H0: среднее lowph в группе born at Duke равно среднему в группе transported
+
+H1: средние не равны
+
+Большие выборки, распределение приближается к нормальному по ЦПТ, используем двусторонний t тест c поправкой Уэлча для неизвестных дисперсий (уровень значимости установим 0.05)
+
+t = 5.5731, df = 111.03, p-value = 1.77e-07 
+
+p-value<0.05
+
+95 percent confidence interval:
+ 0.05762847 0.1212193
+ 
+ 0 не входит в ДИ
+ 
+ Следовательно, отклоняем нулевую гипотезу в пользу альтернативной
+ 
+ Как бы вы интерпретировали результат, если бы знали, что более низкое значение lowph ассоциировано с более низкой выживаемостью?
+ 
+ В таком случае группа transported имеет более низкую выживаемость по сравнению с группой born at Duke
+
+
+```{r}
+test <- cleaned_data %>% t_test(lowph ~ inout, detailed=TRUE) %>% 
+  add_significance() %>%
+  mutate(y.position = max(cleaned_data$lowph, na.rm = TRUE) + 0.5) 
+print(test)
+
+
+  ggplot(cleaned_data, aes(x=inout, y=lowph, fill=inout))+
+  geom_boxplot()+
+  #stat_pvalue_manual(test, label="p-value")+ не работает с этой строкой, в чем причина?
+  theme_bw()
+
+  
+```
+
+# Корреляционный анализ
+
+```{r}
+num_data <- cleaned_data %>% select(where(is.numeric), -c(birth,year, exit)) %>% glimpse()
+```
+
+```{r fig.height=10, fig.wigth=10}
+data_cor <- cor(num_data)
+
+data_cor %>% corr.test(method = "spearman") %>% 
+  print(short=FALSE)
+corrplot(data_cor, method = 'number',insig = "blank")
+
+data_cor %>%
+  network_plot(min_cor = .0)
+```
+# Иерархическая кластеризация
+
+```{r}
+# Стандартизация
+data_scaled <- scale(data_cor)
+# Матрица дистанций
+data_dist <- dist(data_scaled, method = "euclidean")
+# Дендрограмма кластеров
+data_dist.hc <- hclust(d = data_dist, method = "ward.D2")
+# Визуализация
+fviz_dend(data_dist.hc, 
+          k=2, 
+          cex = 0.6,
+          color_labels_by_k = TRUE,
+          rect = TRUE) 
+
+# Определение оптимального количества кластеров методом силуэт и потом оптимизация кода выше
+fviz_nbclust(data_scaled, kmeans, method = "silhouette")
+```
+# Heatmap+кластеризация
+
+Вывод: в данных имеется два кластера: 1(pneumo, dead, hospstay, pda, vent, cld) и 2 (lowph, bwt, gest, pltct, apg1, twn). Между кластерами наблюдается преимущественно отрицательная корреляция.
+
+```{r}
+pheatmap(data_scaled, 
+         show_rownames = TRUE, 
+         clustering_distance_rows = data_dist,
+         clustering_method = "ward.D2", 
+         cutree_rows = 5,
+         cutree_cols = length(colnames(data_scaled)),
+         angle_col = 45, 
+         main = "Dendrograms for clustering rows and columns with heatmap")
+```
+# PCA
+
+Вывод: первая компонента описывает 65% вариаций, а первые две компоненты описывают 75.45% вариаций данных (следовательно, в этих данных много скоррелированных между собой переменных). 1 группа (pneumo, dead, hospstay, pda, vent, cld) и 2 (lowph, bwt, gest, pltct, apg1, twn) имеют отрицательную корреляцию между группами, но при этом они скоррелированы между собой внутри групп.
+
+```{r}
+# Используем стандартизованные значения для PCA, так как шкалы у переменных разные
+
+data_pca <- prcomp(num_data, scale = T) 
+summary(data_pca)
+fviz_pca_var(data_pca, col.var = "contrib")
+```
+# biplots
+
+```{r}
+biplot <- ggbiplot(data_pca,
+         groups = as.factor(cleaned_data$dead),
+         scale=0, alpha = 0.5) + 
+  theme_bw()
+biplot
+```
+
+
+```{r}
+data_pca$id <-cleaned_data$id
+
+ggplotly(biplot) %>%
+  style(text = paste("ID:", data_pca$id)) # как сделать без перекрытия переменных?
+```
+
+Колонку dead использовать некорректно, так как она не учитывает время жизни (exit-birth), что необходимо для модели выживаемости
+
+# UMAP
+
+Вывод: Два кластера (голубой и красный в углу) отличаются от остальных по каким-то признакам, при этом часть живых пациентов имеют характеристики, близкие к умершим. То же самое видно на PCA (умершие имеют позитивную корреляцию с одним кластером переменных и обратную корреляцию с другим кластером переменных, но в то же время часть живых пациентов тоже имеют такую зависимость).
+
+```{r}
+umap_prep <- recipe(~., data = num_data) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_umap(all_predictors()) %>%  
+  prep() %>%   
+  juice() 
+
+umap_prep %>%
+  ggplot(aes(UMAP1, UMAP2)) + 
+  geom_point(aes(color = as.character(num_data$dead)),
+             alpha = 0.7, size = 1) +
+  labs(color = NULL) 
+```
+# Изменим n_neighbors и min_dist
+
+Вывод: появилось 2 голубых кластера, данные выглядят более однородными
+
+```{r}
+umap_prep <- recipe(~., data = num_data) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_umap(all_predictors(),neighbors=5, min_dist=0.5) %>%  # по умолчанию было 15 и 0.01 соответственно
+  prep() %>%   
+  juice() 
+
+umap_prep %>%
+  ggplot(aes(UMAP1, UMAP2)) + 
+  geom_point(aes(color = as.character(num_data$dead)),
+             alpha = 0.7, size = 1) +
+  labs(color = NULL)
+```
+
+
