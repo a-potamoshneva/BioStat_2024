@@ -1,0 +1,567 @@
+---
+title: "Regression"
+author: "Anastasiia Potamoshneva"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(gtsummary)
+library(readxl)
+library(openxlsx)
+library(GGally)
+library(broom)
+library(ggfortify)
+library(ggResidpanel)
+library(performance)
+library(lmtest)
+library(sandwich)
+library(emmeans)
+library(car)
+library(DT)
+```
+
+```{r, echo=FALSE}
+hw <- read_excel("data/raw/HW_data.xlsx")
+```
+
+## 1. Каким образом вы будете оценивать физическую активность респондентов? Есть ли у вас предварительные предположения относительно того, каким образом выбранный вами показатель может быть ассоциирован с гликированным гемоглобином?
+
+Будем оценивать физическую активность в соответствии с протоколом IPAQ. 
+
+**Количественная оценка**
+
+1) Сначала рассчитаем общее количество MET (Metabolic Equivalent of Task)-min в неделю для каждого респондента, используя формулу:
+
+Total MET-min/per week = MET level x minutes of activity/day x days per week
+
+MET levels:
+
+Walking = 3.3 METs (переменные PAD645, PAQ640)
+
+Moderate Intensity = 4.0 METs (переменные PAD630, PAQ625, PAD675, PAQ670)
+
+Vigorous Intensity = 8.0 METs (переменные PAD615, PAQ610, PAD660, PAQ655)
+
+**Категориальная оценка**
+
+2) Затем используем следующие критерии для категоризации физической активности на уровни high, moderate, low:
+
+1. Low
+
+• No activity is reported OR
+
+• Some activity is reported but not enough to meet Categories 2 or 3.
+
+2. Moderate
+
+Either of the following 3 criteria
+
+• 3 or more days of vigorous activity of at least 20 minutes per day OR
+
+• 5 or more days of moderate-intensity activity and/or walking of at least 30 minutes
+per day OR
+
+• 5 or more days of any combination of walking, moderate-intensity or vigorous-
+intensity activities achieving a minimum of at least 600 MET-minutes/week.
+
+3. High
+
+Any one of the following 2 criteria
+
+• Vigorous-intensity activity on at least 3 days and accumulating at least 1500
+MET-minutes/week OR
+
+• 7 or more days of any combination of walking, moderate- or vigorous-intensity
+activities accumulating at least 3000 MET-minutes/week
+
+Предварительно мы ожидаем, что увеличение физической активности ассоциировано со снижением гликированного гемоглобина.
+
+```{r activityGrading, echo=FALSE}
+hw <- hw %>% 
+  mutate(`Total MET` = 3.3*PAD645*PAQ640 + 4*((PAD630*PAQ625)+(PAD675*PAQ670)) + 8*((PAD615*PAQ610)+(PAD660*PAQ655))) %>% 
+  mutate(`Physical activity` = case_when( ((PAQ610+PAQ655) >=3 & `Total MET` >=1500) |
+                                          ((PAQ610+PAQ625+PAQ640+PAQ655+PAQ670) >= 7 & `Total MET` >= 3000) ~ "high",
+                                          ((PAQ610+PAQ655) >=3 & (PAD615+PAD660) >=20) |
+                                          ((PAQ620+PAQ640+PAQ670 >=5) & (PAD630+PAD645+PAD675 >=30)) |
+                                          (((PAQ610 + PAQ625 + PAQ640 + PAQ655 + PAQ670) >= 5) & 
+                                             (`Total MET` >= 600)) ~ "moderate",
+                                          TRUE ~ "low" )) 
+                                            
+```
+
+## 2. Ковариаты для каких показателей вы включите в модель для коррекции эффекта физической активности в отношении гликированного гемоглобина? Каким образом вы будете их оценивать по имеющимся данным?
+
+Необходимо провести поправку на следующие ковариаты:
+
+1. Пол (Sex): RIAGENDR-factor с уровнями 
+
+1-male, 
+
+2-female
+
+2. Возраст (Age): RIDAGEYR-numeric
+
+3. Образование (Education): DMDEDUC2-factor
+
+1	Less than 9th grade, 
+
+2	9-11th grade (Includes 12th grade with no diploma), 
+
+3	High school graduate/GED or equivalent, 
+
+4	Some college or AA degree, 
+
+5	College graduate or above
+
+4. Раса (Race): RIDRETH3- factor 
+
+1	Mexican American - переведем в Hispanic, 
+
+2	Other Hispanic - переведем в Hispanic, 
+
+3	Non-Hispanic White, 
+
+4	Non-Hispanic Black, 
+
+6	Non-Hispanic Asian, 
+
+7	Other Race - Including Multi-Racial
+
+5. Сопутствующие заболевания (Comorbidities): 
+
+- Астма в анамнезе - MCQ010 - фактор (1-да, 2-нет) (далее все переменные являются факторами с аналогичными уровнями)
+
+- Астма в текущий момент - MCQ035 (объединим две переменные в фактор с уровнями "No", "Asthma in history", "Current asthma")
+
+- ИБС - MCQ160c 
+
+- Застойная СН - MCQ160b 
+
+- Инфаркт миокарда -MCQ160e 
+
+- Инсульт - MCQ160f 
+
+- Заболевания ЩЖ в анамнезе - MCQ160m 
+
+- Заболевания ЩЖ в текущий момент - MCQ170m (объединим две переменные в фактор с уровнями "No", "TD in history", "Current TD")
+
+- ХОБЛ -MCQ160o 
+
+- Рак или другое злокачественное новообразование - MCQ220 
+
+- Сахарный диабет - DIQ010 
+
+
+6. Курение (Smoking): SMQ040-factor
+
+1	Every day,
+
+2	Some days,
+
+3	Not at all
+
+7. Семейный доход (Family income): INDFMIN2-factor
+
+1	$ 0 to $ 4,999,
+2	$ 5,000 to $ 9,999,
+3	$10,000 to $14,999,
+4	$15,000 to $19,999,
+5	$20,000 to $24,999,
+6	$25,000 to $34,999,
+7	$35,000 to $44,999,
+8	$45,000 to $54,999,
+9	$55,000 to $64,999,
+10	$65,000 to $74,999,
+11	$75,000 to $99,999,
+12	$100,000 and Over
+
+Поделим на 3 категории по 25% и 75% квантилям нашей выборки (<25.000$, $25.000- $99.999, $100,000 and Over)
+
+• Бонусное задание: для представленного DAG'а укажите роль каждого показателя по отношению к изучаемой ассоциации между физической активностью и гликированным гемоглобином (конфаундеры (в том числе proxy конфаундеры), коллайдеры, медиаторы)
+
+Marital status - предшественник воздействия
+
+Education, Race, Family income, Sex, Age, Comorbidities - конфаундеры 
+
+Smoking - прокси-конфаундер
+
+Blood pressure, Diabetic medication - коллайдеры
+
+Body mass index - медиатор
+
+
+```{r, echo=FALSE}
+
+# Чистка датасета
+
+cleaned_hw <- hw %>% 
+  transmute(`Patient ID` = SEQN,
+            Sex = factor(RIAGENDR, 
+                            levels = c(1,2),
+                            labels = c("Male", "Female")),
+         Age = RIDAGEYR,
+         Education = factor(DMDEDUC2,
+                            levels = c(1,2,3,4,5),
+                            labels = c("Less than 9th grade", "9-11th grade", "High school graduate", "Some college or AA degree", "College graduate or above")),
+         Race = factor(RIDRETH3,
+                       levels = c(1,2,3,4,6,7),
+                       labels = c("Hispanic", "Hispanic", "White", "Black", "Asian", "Other")), 
+         Asthma = factor(case_when(
+           MCQ010 == 2 & MCQ035 == 2 ~ "No",
+           MCQ010 == 1 & MCQ035 == 2 ~ "Asthma in history",
+           TRUE ~ "Current asthma"),
+           levels = c("No", "Asthma in history", "Current asthma")),
+          `Coronary disease` = factor(MCQ160C,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),
+         `Congestive HF` = factor(MCQ160B,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")), 
+         
+          `Myocardial infarction` = factor(MCQ160E,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),  
+          Stroke = factor(MCQ160F,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),
+         
+          COPD = factor(MCQ160O,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),
+         Cancer = factor(MCQ220,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),
+         Diabetes= factor(DIQ010,
+                                       levels = c(2,1),
+                                       labels = c("No", "Yes")),
+         `Thyroid disease` = factor(case_when(
+           MCQ160M == 2 & MCQ170M == 2 ~ "No",
+           MCQ160M == 1 & MCQ170M == 2 ~ "TD in history",
+           TRUE ~ "Current TD"),
+           levels = c("No", "TD in history", "Current TD")),
+          Smoking = factor(SMQ040,
+                              levels = c(1,2,3),
+                              labels = c("Every day", "Some days", "Not at all")),
+          `Family income` = factor(INDFMIN2,
+                                   levels = c(1:12),
+                                   labels = c("<25.000$", "<25.000$", "<25.000$", "<25.000$", "<25.000$", "$25.000- $99.999", "$25.000- $99.999", "$25.000- $99.999", "$25.000- $99.999", "$25.000- $99.999", "$25.000- $99.999", "$100,000 and Over")),
+         `Total MET`,
+         `Physical activity` = fct_relevel(`Physical activity`, "low"),
+         HbA1c = LBXGH,
+         BMI =BMXBMI
+          
+) 
+```
+
+```{r, include=FALSE}
+# Проверим наличие пропущенных значений в датасете
+
+print(cleaned_hw[rowSums(is.na(cleaned_hw)) > 0, ])
+
+```
+Описательная статистика:
+
+```{r, echo=FALSE}
+tbl_summary(
+  cleaned_hw, 
+  type = list(all_continuous() ~ "continuous2"),
+  statistic = list(
+    all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}-{p75})", "{min}-{max}")
+  )) %>%
+  modify_footnote(everything() ~ NA) %>%
+  bold_labels()
+```
+
+## 3. Проведите необходимый эксплораторный анализ перед оценкой модели.
+
+```{r, fig.width=15, fig.height=15, echo=FALSE, warning=FALSE}
+ggpairs(
+  cleaned_hw %>% dplyr::select(HbA1c, everything()), 
+  upper = list(continuous = wrap("points", alpha = 0.5, size = 1),
+               combo = wrap("points", alpha = 0.5, size = 1),
+               disrete = "blank"),
+  lower = list(continuous = "cor",
+               discrete = "count",
+               combo = wrap("box_no_facet", outlier.size = 0.5)),
+  diag = list(continuous = "barDiag",
+              discrete = "barDiag"),
+  showStrips = TRUE, progress = FALSE) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid.minor = element_blank(),
+        strip.placement = "outside",
+        strip.background = element_rect(color = "white", fill = "#EFEBE9"),
+        strip.text = element_text(size = 8, face = "bold"))
+```
+
+## 4. Оцените модель для зависимости гликированного гемоглобина от выбранного вами показателя физической активности без ковариат и с ними. Проведите необходимую диагностику этих моделей -- требует ли что-либо коррекции и почему? В случае необходимости коррекции по результатам диагностики сделайте ее.
+
+1) Оценим модель зависимости HbA1c от Physical activity **без ковариат**
+
+```{r, echo=FALSE}
+hw_fit0 <- lm(HbA1c ~ `Physical activity`, cleaned_hw)
+
+summary(hw_fit0)
+```
+Диагностика модели без ковариат:
+
+Residuals vs Fitted
+
+Вывод: график неинформативен для категориальной переменной. 
+
+Scale-Location
+
+Вывод: дисперсия остатков разная и зависит от условного мат.ожидания. 
+
+Q-Q plot
+
+Вывод: имеются отклонения распределения остатков от нормальности. Выбросы, некорректная спецификация формы зависимости? Так как выборка большая, можем ожидать соблюдение ЦПТ -> можем использовать квантили нормального распределения.
+
+Residuals vs Leverage
+
+Вывод: все расстояния Кука меньше 0.5. Влиятельные наблюдения отсутствуют.
+
+```{r, echo=FALSE}
+autoplot(hw_fit0)
+```
+
+```{r, echo=FALSE}
+autoplot(hw_fit0, 4, ncol = 1)
+```
+
+2) Оценим модель зависимости HbA1c от Physical activity **с ковариатами**
+
+```{r, echo=FALSE}
+
+hw_fit1 <- lm(HbA1c ~ `Physical activity` + Sex + Age + Education + Race + Asthma + `Coronary disease` + `Congestive HF` + `Myocardial infarction` + Stroke + COPD + Cancer + Diabetes + `Thyroid disease` + Smoking + `Family income`, cleaned_hw)
+
+summary(hw_fit1)
+```
+
+Диагностика модели с ковариатами:
+
+Residuals vs Fitted
+
+Вывод: линия близка к нулю и горизонтальная, что может свидетельствовать о линейности. Однако разброс значений вокруг линии неодинаков.
+
+Scale-Location
+
+Вывод: дисперсия остатков разная вдоль линии регрессии и зависит от условного мат.ожидания. 
+
+Q-Q plot
+
+Вывод: имеются отклонения распределения остатков от нормальности. Выбросы, некорректная спецификация формы зависимости? Так как выборка большая, можем ожидать соблюдение ЦПТ -> можем использовать квантили нормального распределения.
+
+Residuals vs Leverage
+
+Вывод: все расстояния Кука меньше 0.5. Влиятельные наблюдения отсутствуют.
+
+Мультиколлинеарность
+
+Вывод: все коэффициенты VIF меньше 5 (не диагностирована мультиколлинеарность).
+
+```{r, echo=FALSE}
+autoplot(hw_fit1)
+```
+
+```{r, echo=FALSE}
+autoplot(hw_fit1, 4, ncol = 1)
+```
+
+```{r, echo=FALSE, message=FALSE}
+resid_xpanel(hw_fit1, smoother = TRUE)
+```
+
+
+```{r, echo=FALSE}
+vif_values <- vif(lm(HbA1c ~ `Physical activity` + Sex + Age + Education + Race + 
+                     Asthma + `Coronary disease` + `Congestive HF` + 
+                     `Myocardial infarction` + Stroke + COPD + Cancer + 
+                     Diabetes + `Thyroid disease` + Smoking + `Family income`, 
+                     data = cleaned_hw))
+print(vif_values)
+```
+
+Коррекция модели
+
+ В данных имеются явные выбросы, однако их исключение нецелесообразно, так как это не случайные ошибки, а клинически возможные значения.  
+
+Проведем коррекцию стандартных ошибок на гетероскедастичность в модели без ковариат:
+
+```{r, echo=FALSE}
+hw_fit0_corrected <- coeftest(hw_fit0, vcov. = vcovHC, type = "HC1")
+
+table_fit0 <- broom::tidy(hw_fit0_corrected, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+datatable(table_fit0, options = list(pageLength = 10))
+```
+
+Проведем коррекцию стандартных ошибок на гетероскедастичность в модели с ковариатами:
+
+```{r, echo=FALSE}
+hw_fit1_corrected <- coeftest(hw_fit1, vcov. = vcovHC, type = "HC1")
+
+table_fit1 <- broom::tidy(hw_fit1_corrected, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+datatable(table_fit1, options = list(pageLength = 10))
+```
+
+## 5. Представьте результаты оценки модели без ковариат и с ковариатами в виде точечной и интервальной оценки эффекта физической активности. Дайте им словесную интерпретацию. Какие выводы мы можем сделать, исходя из точечной оценки? А из интервальной? Как вы думаете, можно ли считать эффект клинически значимым? Если затрудняетесь с ответом, что бы вам помогло дать ответ на этот вопрос?
+
+Оценка модели без ковариат:
+
+Значение Intercept равно 5.90 (условное среднее значение HbAc1 при Physical activity = low)
+
+В категории умеренной активности среднее HbAc1 ниже на 0.15% по сравнению с категорией низкой активности (p>0.05, 95% ДИ = [-0.30;0.004] - включает ноль). Результат статистически незначим.
+
+В категории высокой активности среднее HbAc1 ниже на 0.21% по сравнению с категорией низкой активности (p<0.05, 95% ДИ = [-0.38;-0.05] - не включает ноль). Результат статистически значим.
+
+Оценка модели с ковариатами:
+
+Значение Intercept равно 7.25 (условное среднее значение HbAc1 при Physical activity = low, Sex = Male, Age = 0, Education = Less than 9th grade, Race = Hispanic, Smoking = Every day, Family income = <25.000, Comorbidities = No)
+
+При прочих равных и умеренной активности среднее HbA1c снижается на 0.08 (p>0.05, 95% ДИ = [-0.20;0.03]), при высокой активности и прочих равных повышается на 0.08 (p>0.05, 95% ДИ = [-0.07;0.23]). Клиническая значимость отсутствует.
+
+Статистически значимыми будут следующие ковариаты:
+
+- Возраст (увеличение на 0.007 с каждым годом, p<0.05, 95% ДИ = [0.0035;0.010])
+
+- Наличие диабета (увеличение на 1.61, p<0.05, 95% ДИ = [1.33;1.89])
+
+- Наличие заболеваний ЩЖ в анамнезе (снижение на 0.36, p<0.05, 95% ДИ = [-0.57;-0.15])
+
+
+## 6. Проверьте гипотезу об отсутствии ассоциации между физической активностью и гликированным гемоглобином. Сделайте выводы по полученным результатам.
+
+H0: beta(moderate) = beta(high) = 0
+
+Ha: beta(moderate) != 0 и/или beta(high) != 0
+
+В модели без ковариат:
+
+p<0.05 (p = 0.028)
+
+Вывод: Отвергаем нулевую гипотезу в пользу альтернативной. Существует статистически значимая разница между низкой активностью и минимум одной из категорий: умеренная и высокая активность.
+
+```{r, echo=FALSE}
+car::linearHypothesis(hw_fit0, names(coef(hw_fit0))[grepl("Physical activity", names(coef(hw_fit0)))],vcov. = vcovHC(hw_fit0, type = "HC1"))
+```
+
+Для модели с ковариатами:
+
+p>0.05 (p = 0.060)
+
+Вывод: Не можем отвергнуть нулевую гипотезу. Отсутствует статистически значимая разница между низкой, умеренной и высокой активностью.
+
+```{r, echo=FALSE}
+car::linearHypothesis(hw_fit1, names(coef(hw_fit1))[grepl("Physical activity", names(coef(hw_fit1)))],vcov. = vcovHC(hw_fit1, type = "HC1"))
+```
+## 7. Является ли пол модификатором эффекта физической активности в отношении гликированного гемоглобина? Если да, каков эффект для мужчин и женщин и насколько он отличается между ними?
+
+Включим пол в модель как модификатор.
+
+Н0: beta(`Physical activity`high:SexFemale) = beta (`Physical activity`moderate:SexFemale) = 0
+
+Ha: beta(`Physical activity`high:SexFemale) !=0 и/или beta (`Physical activity`moderate:SexFemale) != 0
+
+Результат: p>0.05 (p = 0.875)
+
+Не можем отвергнуть нулевую гипотезу. Нет различий между изменением уровня гликированного гемоглобина при умеренной и высокой физической активности по сравнению с низкой у женщин и аналогичным изменением у мужчин.
+
+```{r, echo=FALSE}
+modif_sex <- lm(HbA1c ~ `Physical activity`*Sex + Age + Education + Race + Asthma + `Coronary disease` + `Congestive HF` + `Myocardial infarction` + Stroke + COPD + Cancer + Diabetes + `Thyroid disease` + Smoking + `Family income`, cleaned_hw)
+
+summary(modif_sex)
+
+linearHypothesis(modif_sex, c("`Physical activity`high:SexFemale = 0", "`Physical activity`moderate:SexFemale = 0"))
+```
+## 8. Соответствуют ли полученные вами результаты вашему исходному предположению? Как меняется оценка эффекта физической активности при добавлении ковариат в модель и почему?
+
+Изначальное предположение, что с увеличением физической активности уменьшается значение HbA1c, было подтверждено только в модели без ковариат. В модели с ковариатами статистически значимых различий между группами физической активности нет. Это может свидетельствовать о том, что другие факторы преимущественно объясняют различия в HbA1c.
+
+• Бонусное задание: оцените прямой (direct) эффект физической активности на гликированный гемоглобин (со всей необходимой диагностикой и коррекциями). Как он отличается от общего (total) эффекта? В чем причина/ механизм этих различий?
+
+```{r, echo=FALSE}
+hw_fit_direct <- lm(HbA1c ~ `Physical activity` + Sex + Age + Education + Race + Asthma + `Coronary disease` + `Congestive HF` + `Myocardial infarction` + Stroke + COPD + Cancer + Diabetes + `Thyroid disease` + Smoking + `Family income` + BMI, cleaned_hw)
+
+summary(hw_fit_direct)
+```
+Диагностика модели прямого эффекта:
+
+Residuals vs Fitted
+
+Вывод: линия близка к нулю и горизонтальная, что может свидетельствовать о линейности. Однако разброс значений вокруг линии неодинаков.
+
+Scale-Location
+
+Вывод: дисперсия остатков разная вдоль линии регрессии и зависит от условного мат.ожидания. 
+
+Q-Q plot
+
+Вывод: имеются отклонения распределения остатков от нормальности. Выбросы, некорректная спецификация формы зависимости?
+
+Residuals vs Leverage
+
+Вывод: все расстояния Кука меньше 0.5. Не обнаружено влиятельных значений.
+
+Мультиколлинеарность
+
+Вывод: все коэффициенты VIF меньше 5 (не диагностирована мультиколлинеарность).
+
+```{r, echo=FALSE}
+autoplot(hw_fit_direct)
+```
+
+```{r, echo=FALSE}
+autoplot(hw_fit_direct, 4, ncol = 1)
+```
+
+Проведем коррекцию стандартных ошибок на гетероскедастичность:
+
+```{r, echo=FALSE}
+hw_fit_direct_corrected <- coeftest(hw_fit_direct, vcov. = vcovHC, type = "HC1")
+```
+
+VIF < 5, мультиколлинеарность не выявлена.
+
+```{r, echo=FALSE}
+vif_values_1 <- vif(lm(HbA1c ~ `Physical activity` + Sex + Age + Education + Race + 
+                     Asthma + `Coronary disease` + `Congestive HF` + 
+                     `Myocardial infarction` + Stroke + COPD + Cancer + 
+                     Diabetes + `Thyroid disease` + Smoking + `Family income` + BMI, 
+                     data = cleaned_hw))
+print(vif_values_1)
+```
+
+Значение Intercept равно 4.98 (условное среднее значение HbAc1 при Physical activity = low, Sex = Male, Age = 0, Education = Less than 9th grade, Race = Hispanic, Smoking = Every day, Family income = <25.000, Comorbidities = No, BMI=0)
+
+При прочих равных и умеренной активности HbA1c снижается на 0.06 (p>0.05, 95% ДИ = [-0.18;0.05]), при высокой активности и прочих равных повышается на 0.10 (p>0.05, 95% ДИ = [-0.05;0.24])
+
+Статистически значимыми будут следующие ковариаты:
+
+- Возраст (увеличение HbA1c на 0.007 с каждым годом, p<0.05, 95% ДИ = [0.004;0.010])
+
+- Раса Black (увеличение на 0.19, p<0.05, 95% ДИ = [-0.02;0.39])
+
+- Наличие ИБС (увеличение на 0.40, p<0.05, 95% ДИ = [0.02;0.79])
+
+- наличие ХОБЛ (снижение на 0.36, p<0.05, 95% ДИ = [-0.73;0.01]
+
+- Наличие диабета (увеличение на 1.55, p<0.05, 95% ДИ = [1.50;1.84])
+
+- Наличие заболеваний ЩЖ в анамнезе (снижение на 0.34, p<0.05, 95% ДИ = [-0.55;-0.12])
+
+-ИМТ (увеличение на 0.02 при прибавке каждой единицы, p<0.05, 95% ДИ = [0.006;0.025])
+
+```{r, echo=FALSE}
+table_direct_corrected <- broom::tidy(hw_fit_direct_corrected, conf.int = TRUE)%>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+datatable(table_direct_corrected, options = list(pageLength = 10))
+```
+
+Вывод: В модели с ковариатами и общий, и прямой эффекты без учета ИМТ одинаковы по направленности: снижение гликированного гемоглобина при умеренной активности по сравнению с низкой, и повышение при высокой, оба статистически незначимы при включении ковариат. Следовательно, эффекта физической активности на гликированный гемоглобин не обнаружено. Увеличение ИМТ на каждую единицу статистически значимо увеличивает HbA1c на 0.02%, что также может быть клинически значимо (в частности, при сравнении нормального ИМТ и ожирения).
+
+
